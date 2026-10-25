@@ -1,0 +1,9 @@
+[project]
+name = "watermark-edits"
+version = "0.1.0"
+description = "Simulations for 'Text watermark detection under edits': green-list watermark, budgeted substitution attacks, false-negative exponents"
+requires-python = ">=3.12"
+dependencies = ["numpy", "scipy", "matplotlib"]
+
+[dependency-groups]
+dev = ["pytest"]

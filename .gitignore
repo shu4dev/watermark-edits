@@ -1,0 +1,18 @@
+# outputs: arrays, tables, plots, logs. Curated figures a results note cites go under results/figures/.
+/data
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+.ruff_cache/
+
+# editors / misc
+.vscode/
+.idea/
+.DS_Store
+
+# agent state
+.claude/
