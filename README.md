@@ -73,6 +73,19 @@ Numbers to expect at the defaults (seed 0):
 at the finite-n threshold where -ln beta_2000 >= 100; the n = 10 000 exponent closer to the limit; rho_hat*_n within 0.05
 of rho*_n; the NP test never weaker than the green count; the diagnostic reported). All pass at the defaults.
 
+## Figure
+
+![Exponent against edit fraction, one panel per leakage level](figures/exponent_vs_rho.png)
+
+The default run (`--seed 0`), one panel per leakage level lambda. Higher is better for the detector: the exponent is
+the number of nats each token adds against the miss probability, and zero means no text length recovers the
+watermark. Blue dots are the green count at n = 2000, orange dots the oracle Neyman-Pearson ceiling at n = 2000.
+At lambda = 0 the open circles are the green count at n = 10 000, the dashed green curve is the Cramer rate at the
+n = 2000 threshold (it lies on the blue dots), the solid green curve is the n -> infinity rate I(gamma), and the grey
+curve is the KL lower bound. Vertical lines: solid, where beta_2000 crosses 1/2; dashed, where the mean green rate
+crosses the n = 2000 threshold; dotted, the limit rho*. The orange rise past rho* at lambda >= 0.5 is the
+full-budget attacker becoming detectable as too red, not a property of the watermark.
+
 ## Layout and workflow
 
 Each block names the source its model or formula comes from and the file that implements it.
