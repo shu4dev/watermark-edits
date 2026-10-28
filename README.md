@@ -75,14 +75,16 @@ of rho*_n; the NP test never weaker than the green count; the diagnostic reporte
 
 ## Layout and workflow
 
-Each block names the source its model or formula comes from and the functions that implement it.
+Each block names the source its model or formula comes from and the file that implements it.
 
 ```
  watermark-edits/
  +-- README.md
  +-- pyproject.toml, uv.lock, .python-version   numpy, scipy, matplotlib; 3.13
- +-- code/exponent_greenlist.py                 the whole experiment, one script
- |                                              (L = line number below)
+ +-- code/exponent_greenlist.py                 main loop, self-checks, figure
+ +-- code/wmsim/                                util.py, tokenmodel.py,
+ |                                              attack.py, greencount.py,
+ |                                              oraclenp.py, exponent.py
  +-- data/             created by the run, untracked: csv, json, png
  +-- results/figures/  created by the run, untracked: a copy of the figure
 
@@ -95,7 +97,7 @@ Each block names the source its model or formula comes from and the functions th
  |  otherwise top token 0.9 and the rest uniform.                             |
  |  lit:  Li et al. 2025 sec. 5.1 (synthetic spike distributions);            |
  |        Kirchenbauer et al. 2023 Thm 4.2 (entropy)                          |
- |  code: level_counts L62                                                    |
+ |  code: wmsim/tokenmodel.py                                                 |
  +----------------------------------------------------------------------------+
          |
          v
@@ -105,8 +107,8 @@ Each block names the source its model or formula comes from and the functions th
  |  lit:  Kirchenbauer et al. 2023 (scheme); Zhao et al. 2024 App. D          |
  |        (what hashing would add); Zhang et al. 2024, Jovanovic et al.       |
  |        2024 (list recovery from the API: the realistic lambda range)       |
- |  code: gamma enters pmf(., gamma) and threshold L69;                       |
- |        keys are drawn only in q_levels L78                                 |
+ |  code: gamma enters wmsim/greencount.py and wmsim/oraclenp.py;             |
+ |        keys are drawn only in wmsim/tokenmodel.py                          |
  +----------------------------------------------------------------------------+
          |
          v
@@ -115,7 +117,7 @@ Each block names the source its model or formula comes from and the functions th
  |  diagnostic P(top token green | tail token emitted) = 0.053                |
  |  lit:  Kirchenbauer et al. 2023 sec. 3 (the tilt);                         |
  |        Jensen on g(x) = e^delta x / (e^delta x + 1 - x)                    |
- |  code: green_prob L34, q_levels L78, spike_diagnostic L87                  |
+ |  code: wmsim/tokenmodel.py                                                 |
  +----------------------------------------------------------------------------+
          |
          v
@@ -126,8 +128,8 @@ Each block names the source its model or formula comes from and the functions th
  |  random and every law is the exact mixture over K.                         |
  |  lit:  Wu and Chandrasekaran 2024 Thm 1 (colour-agnostic                   |
  |        replacement)                                                        |
- |  code: class_weights L185 (K at its mean); gc_tables L109 and              |
- |        np_alt L151 (exact mixture over K)                                  |
+ |  code: wmsim/attack.py (allocation, per K value and at its mean);          |
+ |        wmsim/greencount.py and wmsim/oraclenp.py (exact mixture over K)    |
  +----------------------------------------------------------------------------+
          |
          v
@@ -136,14 +138,14 @@ Each block names the source its model or formula comes from and the functions th
  |  at alpha; alternative = binomial convolutions mixed over K.               |
  |  lit:  Kirchenbauer et al. 2023 z-test; Fernandez et al. 2023              |
  |        (exact tests at low false-positive rates)                           |
- |  code: threshold L69, gc_tables L109, log_beta_gc L127                     |
+ |  code: wmsim/greencount.py                                                 |
  |  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -   |
  |  Oracle NP, exact on the (greens_H, greens_L) grid: likelihood             |
  |  ratio that knows the attack rule and the levels, not the edited           |
  |  positions.                                                                |
  |  lit:  Neyman-Pearson lemma; Li et al. 2025 (detection                     |
  |        efficiency = exponent at fixed alpha)                               |
- |  code: np_tables L139, np_alt L151, np_test L174                           |
+ |  code: wmsim/oraclenp.py                                                   |
  +----------------------------------------------------------------------------+
          |
          v
@@ -154,7 +156,7 @@ Each block names the source its model or formula comes from and the functions th
  |  rho*_n = mean green rate crosses tau_n/n; rho* = the same at gamma.       |
  |  lit:  Cover and Thomas sec. 11.8 (Stein's lemma); Cramer's                |
  |        theorem; Hoeffding 1963 (KL form of the bound)                      |
- |  code: rate L196, kl_bern L212, rho_star L217                              |
+ |  code: wmsim/exponent.py                                                   |
  +----------------------------------------------------------------------------+
          |
          v
@@ -166,7 +168,7 @@ Each block names the source its model or formula comes from and the functions th
  |    rhostar.csv     rho_hat*_n, rho*_n, rho* per (lambda, n)                |
  |    diagnostic.json q_H, q_L, spike diagnostic, self-checks, params         |
  |  data/figures/<slug>/exponent_vs_rho.png, copied to results/figures/       |
- |  code: plot L224, write_csv L280, main L287                                |
+ |  code: exponent_greenlist.py                                               |
  +----------------------------------------------------------------------------+
 ```
 

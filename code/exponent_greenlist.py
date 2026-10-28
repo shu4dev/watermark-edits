@@ -1,7 +1,13 @@
 #!/usr/bin/env python
 """Exact false-negative exponent of green-list detection under budgeted key-blind substitutions.
 
-Plan: plans/2026-10-25-greenlist-substitution-exponent.md (two-level i.i.d. token model).
+A green-list watermark (Kirchenbauer et al. 2023) raises the logits of a secret subset of the vocabulary at every
+position; the detector counts how many tokens landed in those subsets. This repository computes, without sampling,
+how fast the detector's miss rate decays with text length when an attacker has replaced a fraction rho of the tokens,
+knowing the scheme but not the key, or seeing the key at a fraction lambda of the positions. The computation runs in
+a token model with two entropy levels, where every probability is a finite sum, so the miss rate is exact down to
+10^-700 and the exponent and the critical edit fraction come out as numbers rather than estimates.
+
 Positions: uniform level (V tokens) w.p. pi, spike level (top token 0.9, rest uniform) otherwise; counts
 fixed at n_H = floor(pi n), n_L = n - n_H, leaked L_l = floor(lambda n_l). Watermark: independent green
 lists (each token green w.p. gamma), soft bias delta; q_l = P(emitted token green) at level l.
@@ -22,202 +28,17 @@ import time
 from pathlib import Path
 
 import numpy as np
-from scipy.optimize import brentq
-from scipy.special import logsumexp
 from scipy.stats import binom
 
+from wmsim.attack import class_weights
+from wmsim.exponent import kl_bern, rate, rho_star
+from wmsim.greencount import gc_tables, log_beta_gc, threshold
+from wmsim.oraclenp import np_alt, np_tables, np_test
+from wmsim.tokenmodel import level_counts, q_levels, spike_diagnostic
+from wmsim.util import logconv
+
 SLUG = "2026-10-25-greenlist-substitution-exponent"
-TOP = 0.9           # spike level: probability of the top token
 N_BIG = 10_000      # extra n, lambda = 0 only: green count, no NP grid (plan amendment 2026-10-28)
-
-
-def green_prob(x, delta):
-    """P(emitted token is green | p_t puts mass x on G_t) under the soft watermark."""
-    e = np.exp(delta)
-    return e * x / (1.0 + (e - 1.0) * x)
-
-
-def pmf(N, p):
-    return binom.pmf(np.arange(N + 1), N, p)
-
-
-def pad(v, size):
-    out = np.zeros(size)
-    out[: len(v)] = v
-    return out
-
-
-def logconv(a, b):
-    """Log of the convolution of two pmfs given in log space (direct sum, no floor)."""
-    if len(a) < len(b):
-        a, b = b, a
-    out = np.full(len(a) + len(b) - 1, -np.inf)
-    for j, bj in enumerate(b):
-        if bj > -np.inf:
-            seg = out[j: j + len(a)]
-            np.logaddexp(seg, a + bj, out=seg)
-    return out
-
-
-def level_counts(n, lam, pi):
-    nH = int(np.floor(pi * n + 1e-9))
-    nL = n - nH
-    LH, LL = int(np.floor(lam * nH + 1e-9)), int(np.floor(lam * nL + 1e-9))
-    return nH, nL, LH, LL, nH - LH, nL - LL
-
-
-def threshold(n, gamma, alpha):
-    """Smallest tau with P(Bin(n, gamma) >= tau) <= alpha, and that exact size."""
-    t = np.arange(n + 2)
-    sf = binom.sf(t - 1, n, gamma)
-    tau = int(t[np.argmax(sf <= alpha)])
-    return tau, float(sf[tau])
-
-
-# ---------------------------------------------------------------- per-level green probabilities
-def q_levels(gamma, delta, V, trials, rng):
-    qH = float(green_prob(gamma, delta))  # closed form (|G_t|/V -> gamma)
-    top_green = rng.random(trials) < gamma
-    k = rng.binomial(V - 1, gamma, size=trials)
-    q = green_prob(TOP * top_green + (1 - TOP) * k / (V - 1), delta)  # P(green | key), per key draw
-    qL_formula = gamma * green_prob(TOP + (1 - TOP) * gamma, delta) + (1 - gamma) * green_prob((1 - TOP) * gamma, delta)
-    return qH, float(q.mean()), float(q.std(ddof=1) / np.sqrt(trials)), float(qL_formula)
-
-
-def spike_diagnostic(gamma, delta, V, trials, rng):
-    """P(top token in G_t | a tail token was emitted) at the spike level: closed form and Monte Carlo."""
-    e = np.exp(delta)
-    c = gamma * e + 1 - gamma                                 # tail reweighting at tail green fraction gamma
-    Zg, Zr = TOP * e + (1 - TOP) * c, TOP + (1 - TOP) * c    # Z_t when the top token is green / red
-    p_closed = gamma * Zr / (gamma * Zr + (1 - gamma) * Zg)
-    top_green = rng.random(trials) < gamma
-    k = rng.binomial(V - 1, gamma, size=trials)
-    tail = (1 - TOP) * (e * k + (V - 1 - k)) / (V - 1)      # unnormalised watermarked tail mass
-    topm = TOP * np.where(top_green, e, 1.0)
-    tail_emitted = rng.random(trials) < tail / (tail + topm)  # one emitted token per key draw
-    N = int(tail_emitted.sum())
-    p_mc = float(top_green[tail_emitted].mean())
-    return dict(p_top_green_given_tail_closed=float(p_closed), p_top_green_given_tail_mc=p_mc,
-                p_top_green_given_tail_mc_se=float(np.sqrt(p_mc * (1 - p_mc) / N)), mc_keys=trials,
-                mc_tail_emissions=N, red_prob_bayes_swap_closed=float(1 - p_closed),
-                red_prob_bayes_swap_mc=1 - p_mc, red_prob_keyblind_replacement=1 - gamma,
-                Z_top_green=float(Zg), Z_top_red=float(Zr),
-                p_tail_emitted_closed=float(gamma * (1 - TOP) * c / Zg + (1 - gamma) * (1 - TOP) * c / Zr))
-
-
-# ---------------------------------------------------------------- green count (log space)
-def gc_tables(UH, UL, qH, qL, gamma, tau):
-    """Unleaked positions in attack order (UH uniform, then UL spike); with b of them edited the green count
-    there is R(b) = Bin(b, gamma) + sum of the untouched suffix. Returns log CDF of R(0) and
-    log P(R(b) <= tau - 1) for b = 0..U."""
-    U = UH + UL
-    p = np.r_[np.full(UH, qH), np.full(UL, qL)]
-    T = np.full((U + 1, U + 1), -np.inf)  # T[b] = log pmf of sum_{i >= b} Bern(p_i)
-    T[U, 0] = 0.0
-    for b in range(U - 1, -1, -1):
-        T[b] = T[b + 1] + np.log1p(-p[b])
-        np.logaddexp(T[b, 1:], T[b + 1, :-1] + np.log(p[b]), out=T[b, 1:])
-    logF = np.logaddexp.accumulate(T, axis=1)
-    a = np.arange(tau)
-    LA = binom.logpmf(a[None, :], np.arange(U + 1)[:, None], gamma)
-    h = logsumexp(LA + logF[:, np.minimum(tau - 1 - a, U)], axis=1)
-    return logF[0], h
-
-
-def log_beta_gc(logPM, B, logF0, h, tau):
-    """log P1(S <= tau - 1); the green count depends on the leaked greens only through M = K_H + K_L."""
-    U = len(h) - 1
-    m = np.arange(len(logPM))
-    x = tau - 1 - (m - B)                       # M >= B: S = (M - B) + R(0)
-    hm = np.where(x >= 0, logF0[np.clip(x, 0, U)], -np.inf)
-    lo = m < B                                  # M < B: S = R(B - M), at most U edits land
-    hm[lo] = h[np.minimum(B - m[lo], U)]
-    return float(logsumexp(logPM + hm))
-
-
-# ---------------------------------------------------------------- oracle NP (linear space)
-def np_tables(nH, nL, LH, LL, UH, UL, qH, qL, gamma):
-    pKH, pKL = pmf(LH, qH), pmf(LL, qL)
-    t = dict(pKH=pKH, pKL=pKL, pM=np.convolve(pKH, pKL), XH=pmf(UH, qH), XL=pmf(UL, qL), GH=pmf(UH, gamma))
-    t["cL1"] = np.convolve(pKL, t["XL"])
-    t["YH"] = np.array([np.convolve(pmf(b, gamma), pmf(UH - b, qH)) for b in range(UH + 1)])  # b uniform edits
-    t["ZL"] = np.array([np.convolve(pmf(j, gamma), pmf(UL - j, qL)) for j in range(UL + 1)])  # j spike edits
-    t["logP0"] = (binom.logpmf(np.arange(nH + 1), nH, gamma)[:, None]
-                  + binom.logpmf(np.arange(nL + 1), nL, gamma)[None, :])
-    t["P0"] = np.exp(t["logP0"])
-    return t
-
-
-def np_alt(t, B, nH, nL, LH, UH, UL):
-    """P1(S_H, S_L): exact mixture over (K_H, K_L), which collapses to four outer products."""
-    pKH, pKL, pM = t["pKH"], t["pKL"], t["pM"]
-    L = len(pM) - 1
-    P1 = np.zeros((nH + 1, nL + 1))
-    if B <= LH:  # K_H >= B: whole budget on uniform-level leaked greens
-        P1 += np.outer(pad(np.convolve(pKH[B:], t["XH"]), nH + 1), t["cL1"])
-    if B >= 1:
-        low = np.convolve(pKH[:B], pKL)  # law of M on {K_H < B}
-        if len(low) > B:  # K_H < B <= M: the rest on spike-level leaked greens
-            P1 += np.outer(pad(t["XH"], nH + 1), pad(np.convolve(low[B:], t["XL"]), nL + 1))
-        b = np.arange(max(1, B - L), B + 1)  # M < B: every leaked green flipped, b = B - M edits left
-        w = pM[B - b]
-        s = b <= UH  # leftover lands on unleaked uniform positions
-        if s.any():
-            P1 += np.outer(pad(w[s] @ t["YH"][b[s]], nH + 1), pad(t["XL"], nL + 1))
-        if (~s).any():  # uniform level exhausted, the rest on unleaked spike positions
-            j = np.minimum(b[~s] - UH, UL)
-            P1 += np.outer(pad(t["GH"], nH + 1),
-                           pad(np.bincount(j, weights=w[~s], minlength=UL + 1) @ t["ZL"], nL + 1))
-    return P1
-
-
-def np_test(P1, t, alpha):
-    """Non-randomised NP: reject cells by decreasing P1/P0 until the null mass would exceed alpha."""
-    with np.errstate(divide="ignore"):
-        llr = np.log(P1) - t["logP0"]
-    order = np.argsort(-llr, axis=None, kind="stable")
-    cum = np.cumsum(t["P0"].ravel()[order])
-    k = int(np.searchsorted(cum, alpha, side="right"))
-    return float(P1.ravel()[order[k:]].sum()), (float(cum[k - 1]) if k else 0.0)
-
-
-# ---------------------------------------------------------------- rate function, KL, rho*
-def class_weights(fr, rho, qH, qL):
-    """Class fractions with K at its mean, fr = (L_H, L_L, U_H, U_L) / n, rho = B / n: weights of
-    q' = 1 (leaked unflipped), gamma (edited), q_H, q_L (unedited); the rest (flipped) has q' = 0."""
-    LH, LL, UH, UL = fr
-    k = LH * qH + LL * qL
-    r = max(rho - k, 0.0)
-    eH = min(r, UH)
-    eL = min(r - eH, UL)
-    return np.array([k - min(rho, k), eH + eL, UH - eH, UL - eL])
-
-
-def rate(w, t, gamma, qH, qL):
-    """I(t) = sup_{theta <= 0} [theta t - sum_c w_c log(1 - q_c + q_c e^theta)] over classes q_c = 1, gamma, q_H, q_L."""
-    probs = np.array([gamma, qH, qL])
-    w1, wr = w[0], w[1:]
-    if w1 + wr @ probs <= t:
-        return 0.0
-    if w1 >= t:  # surviving leaked greens alone reach t n
-        return np.inf
-    dLam = lambda th: w1 + wr @ (probs * np.exp(th) / (1 - probs + probs * np.exp(th)))
-    lo = -1.0
-    while dLam(lo) > t:
-        lo *= 2
-    th = brentq(lambda x: dLam(x) - t, lo, 0.0, xtol=1e-14)
-    return float(th * t - (w1 * th + wr @ np.log1p(probs * np.expm1(th))))
-
-
-def kl_bern(a, b):
-    """D(Bern(a) || Bern(b)) when b > a, else 0."""
-    return float(a * np.log(a / b) + (1 - a) * np.log((1 - a) / (1 - b))) if b > a else 0.0
-
-
-def rho_star(fr, target, gamma, qH, qL):
-    """Root in rho of the K-at-mean green rate (piecewise linear) minus target; 1.0 if it never drops below."""
-    f = lambda r: class_weights(fr, r, qH, qL) @ np.array([1.0, gamma, qH, qL]) - target
-    return 1.0 if f(1.0) >= -1e-12 else float(brentq(f, 0.0, 1.0, xtol=1e-12))
 
 
 # ---------------------------------------------------------------- figure
@@ -325,7 +146,7 @@ def main():
         m = np.arange(len(pM))
         for rho in args.rho_grid:
             B = int(np.floor(rho * n + 1e-9))
-            lbg = log_beta_gc(logPM, B, logF0, h, tau)
+            lbg = log_beta_gc(logPM, B, logF0, h, tau, UH, UL)
             b_np = a_np = np.nan
             if not big:
                 P1 = np_alt(t, B, nH, nL, LH, UH, UL)
