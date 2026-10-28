@@ -80,72 +80,94 @@ Each block names the source its model or formula comes from and the functions th
 ```
  watermark-edits/
  +-- README.md
- +-- pyproject.toml, uv.lock, .python-version      numpy, scipy, matplotlib; Python 3.13
- +-- code/exponent_greenlist.py                    the whole experiment in one script (L = line number below)
- +-- data/            created by the run, untracked: results/<slug>/*.csv, *.json; figures/<slug>/*.png
- +-- results/figures/ created by the run, untracked: a copy of the figure
+ +-- pyproject.toml, uv.lock, .python-version   numpy, scipy, matplotlib; 3.13
+ +-- code/exponent_greenlist.py                 the whole experiment, one script
+ |                                              (L = line number below)
+ +-- data/             created by the run, untracked: csv, json, png
+ +-- results/figures/  created by the run, untracked: a copy of the figure
 
- question: E(rho) = lim -(1/n) log beta_n at fixed alpha;  rho* = the first rho with E(rho) = 0
+ question:  E(rho) = lim -(1/n) log beta_n at fixed alpha
+            rho*   = the first rho with E(rho) = 0
          |
          v
- +-- TOKEN MODEL ------------------------------------------------------------------------------------------------+
- |  i.i.d. positions. Uniform over V = 50 000 w.p. pi = 0.5; otherwise top token 0.9, rest uniform.             |
- |  lit:  Li et al. 2025 sec. 5.1 (synthetic spike distributions); Kirchenbauer et al. 2023 Thm 4.2 (entropy)   |
- |  code: level_counts L62                                                                                      |
- +--------------------------------------------------------------------------------------------------------------+
+ +-- TOKEN MODEL --------------------------------------------------------------+
+ |  i.i.d. positions: uniform over V = 50 000 w.p. pi = 0.5,                  |
+ |  otherwise top token 0.9 and the rest uniform.                             |
+ |  lit:  Li et al. 2025 sec. 5.1 (synthetic spike distributions);            |
+ |        Kirchenbauer et al. 2023 Thm 4.2 (entropy)                          |
+ |  code: level_counts L62                                                    |
+ +----------------------------------------------------------------------------+
          |
          v
- +-- KEY AND LEAKAGE --------------------------------------------------------------------------------------------+
- |  Fresh list per position, each token green w.p. gamma. The attacker sees G_t w.p. lambda.                    |
- |  lit:  Kirchenbauer et al. 2023 (scheme); Zhao et al. 2024 App. D (what hashing would add);                  |
- |        Zhang et al. 2024, Jovanovic et al. 2024 (list recovery from the API, the realistic lambda range)     |
- |  code: gamma enters pmf(., gamma) and threshold L69; keys are drawn only in q_levels L78                     |
- +--------------------------------------------------------------------------------------------------------------+
+ +-- KEY AND LEAKAGE ----------------------------------------------------------+
+ |  Fresh list per position, each token green w.p. gamma.                     |
+ |  The attacker sees G_t w.p. lambda.                                        |
+ |  lit:  Kirchenbauer et al. 2023 (scheme); Zhao et al. 2024 App. D          |
+ |        (what hashing would add); Zhang et al. 2024, Jovanovic et al.       |
+ |        2024 (list recovery from the API: the realistic lambda range)       |
+ |  code: gamma enters pmf(., gamma) and threshold L69;                       |
+ |        keys are drawn only in q_levels L78                                 |
+ +----------------------------------------------------------------------------+
          |
          v
- +-- GREEN PROBABILITY PER LEVEL --------------------------------------------------------------------------------+
- |  q_H = 0.711 (uniform), q_L = 0.367 (spike); diagnostic P(top token green | tail token emitted) = 0.053      |
- |  lit:  Kirchenbauer et al. 2023 sec. 3 (the tilt); Jensen on g(x) = e^delta x / (e^delta x + 1 - x)          |
- |  code: green_prob L34, q_levels L78, spike_diagnostic L87                                                    |
- +--------------------------------------------------------------------------------------------------------------+
+ +-- GREEN PROBABILITY PER LEVEL ----------------------------------------------+
+ |  q_H = 0.711 (uniform), q_L = 0.367 (spike);                               |
+ |  diagnostic P(top token green | tail token emitted) = 0.053                |
+ |  lit:  Kirchenbauer et al. 2023 sec. 3 (the tilt);                         |
+ |        Jensen on g(x) = e^delta x / (e^delta x + 1 - x)                    |
+ |  code: green_prob L34, q_levels L78, spike_diagnostic L87                  |
+ +----------------------------------------------------------------------------+
          |
          v
- +-- ATTACKER ---------------------------------------------------------------------------------------------------+
- |  Budget floor(rho n): leaked greens -> red (one edit each), then unleaked uniform positions, then spike;     |
- |  replacement green w.p. gamma where the list is unseen; the leaked-green count K is random, laws exact in K. |
- |  lit:  Wu and Chandrasekaran 2024 Thm 1 (colour-agnostic replacement)                                        |
- |  code: class_weights L185 (K at its mean); gc_tables L109 and np_alt L151 (exact mixture over K)             |
- +--------------------------------------------------------------------------------------------------------------+
-         |
-         +------------------------------------------------+
-         v                                                v
- +-- GREEN COUNT (exact, log space) ------------+   +-- ORACLE NP (exact, 2-D grid) -------------------------+
- |  null Bin(n, gamma), threshold at alpha;     |   |  likelihood ratio on (greens_H, greens_L); knows the   |
- |  alternative = convolutions mixed over K.    |   |  attack rule and levels, not the edited positions.      |
- |  lit:  Kirchenbauer et al. 2023 z-test;      |   |  lit:  Neyman-Pearson lemma; Li et al. 2025            |
- |        Fernandez et al. 2023 (exact tests)   |   |        (detection efficiency = exponent at fixed alpha)|
- |  code: threshold L69, gc_tables L109,        |   |  code: np_tables L139, np_alt L151, np_test L174       |
- |        log_beta_gc L127                      |   |                                                        |
- +----------------------------------------------+   +--------------------------------------------------------+
-         |                                                |
-         +------------------------------------------------+
-         v
- +-- EXPONENT AND CRITICAL FRACTION -----------------------------------------------------------------------------+
- |  E_n = -ln beta_n / n at each n; Cramer rate at the finite-n threshold tau_n/n; KL lower bound;              |
- |  rho_hat*_n = where beta_n crosses 1/2; rho*_n = mean green rate crosses tau_n/n; rho* = the same at gamma.  |
- |  lit:  Cover and Thomas sec. 11.8 (Stein's lemma); Cramer's theorem; Hoeffding 1963 (KL form of the bound)   |
- |  code: rate L196, kl_bern L212, rho_star L217                                                                |
- +--------------------------------------------------------------------------------------------------------------+
+ +-- ATTACKER -----------------------------------------------------------------+
+ |  Budget floor(rho n): leaked greens -> red (one edit each), then           |
+ |  unleaked uniform positions, then spike; replacement green w.p.            |
+ |  gamma where the list is unseen. The leaked-green count K is               |
+ |  random and every law is the exact mixture over K.                         |
+ |  lit:  Wu and Chandrasekaran 2024 Thm 1 (colour-agnostic                   |
+ |        replacement)                                                        |
+ |  code: class_weights L185 (K at its mean); gc_tables L109 and              |
+ |        np_alt L151 (exact mixture over K)                                  |
+ +----------------------------------------------------------------------------+
          |
          v
- +-- OUTPUTS ----------------------------------------------------------------------------------------------------+
- |  data/results/<slug>/beta.csv        per (n, lambda, rho): threshold, exact sizes, log10 beta, class counts  |
- |  data/results/<slug>/exponents.csv   E_gc, E_np, I_n(tau_n/n), I_n(gamma), KL bound per (lambda, rho, n)     |
- |  data/results/<slug>/rhostar.csv     rho_hat*_n, rho*_n, rho* per (lambda, n)                                |
- |  data/results/<slug>/diagnostic.json q_H, q_L, the spike diagnostic, the self-checks, the parameters         |
- |  data/figures/<slug>/exponent_vs_rho.png and a copy under results/figures/                                   |
- |  code: plot L224, write_csv L280, main L287                                                                  |
- +--------------------------------------------------------------------------------------------------------------+
+ +-- DETECTORS (both see the same attacked text) ------------------------------+
+ |  Green count, exact in log space: null Bin(n, gamma), threshold            |
+ |  at alpha; alternative = binomial convolutions mixed over K.               |
+ |  lit:  Kirchenbauer et al. 2023 z-test; Fernandez et al. 2023              |
+ |        (exact tests at low false-positive rates)                           |
+ |  code: threshold L69, gc_tables L109, log_beta_gc L127                     |
+ |  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -   |
+ |  Oracle NP, exact on the (greens_H, greens_L) grid: likelihood             |
+ |  ratio that knows the attack rule and the levels, not the edited           |
+ |  positions.                                                                |
+ |  lit:  Neyman-Pearson lemma; Li et al. 2025 (detection                     |
+ |        efficiency = exponent at fixed alpha)                               |
+ |  code: np_tables L139, np_alt L151, np_test L174                           |
+ +----------------------------------------------------------------------------+
+         |
+         v
+ +-- EXPONENT AND CRITICAL FRACTION -------------------------------------------+
+ |  E_n = -ln beta_n / n at each n; Cramer rate at the finite-n               |
+ |  threshold tau_n/n; KL lower bound.                                        |
+ |  rho_hat*_n = where beta_n crosses 1/2;                                    |
+ |  rho*_n = mean green rate crosses tau_n/n; rho* = the same at gamma.       |
+ |  lit:  Cover and Thomas sec. 11.8 (Stein's lemma); Cramer's                |
+ |        theorem; Hoeffding 1963 (KL form of the bound)                      |
+ |  code: rate L196, kl_bern L212, rho_star L217                              |
+ +----------------------------------------------------------------------------+
+         |
+         v
+ +-- OUTPUTS ------------------------------------------------------------------+
+ |  data/results/<slug>/                                                      |
+ |    beta.csv        per (n, lambda, rho): threshold, exact sizes,           |
+ |                    log10 beta, class counts                                |
+ |    exponents.csv   E_gc, E_np, I_n(tau_n/n), I_n(gamma), KL bound          |
+ |    rhostar.csv     rho_hat*_n, rho*_n, rho* per (lambda, n)                |
+ |    diagnostic.json q_H, q_L, spike diagnostic, self-checks, params         |
+ |  data/figures/<slug>/exponent_vs_rho.png, copied to results/figures/       |
+ |  code: plot L224, write_csv L280, main L287                                |
+ +----------------------------------------------------------------------------+
 ```
 
 ## Conventions
