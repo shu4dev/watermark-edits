@@ -16,3 +16,11 @@ __pycache__/
 
 # agent state
 .claude/
+
+# development notes and agent state, not products
+CLAUDE.md
+/docs/
+/plans/
+/research/
+.playwright-mcp/
+/results/
