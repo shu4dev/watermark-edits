@@ -1,102 +1,175 @@
 # watermark-edits
 
-Simulations for the CS578 project **Text watermark detection under edits** (Pham, Shu, Wanduka, Manganaris):
-green-list LLM watermarks against a budgeted, key-blind substitution attacker, measured as the false-negative
-exponent E(rho) and the critical edit fraction rho*. Proposal: `docs/proposal.md`. Workflow and conventions: `CLAUDE.md`.
-CPU-only rounds (numpy/scipy) run on this Mac through the experiment-runner; GPU rounds need a named compute box.
+Exact false-negative exponents for green-list text watermarks under substitution attacks.
 
-## Repo structure
+A green-list watermark (Kirchenbauer et al. 2023) raises the logits of a secret subset of the vocabulary at every
+position; the detector counts how many tokens landed in those subsets. This repository computes, without sampling,
+how fast the detector's miss rate decays with text length when an attacker has replaced a fraction rho of the tokens,
+knowing the scheme but not the key, or seeing the key at a fraction lambda of the positions. The computation runs in
+a token model with two entropy levels, where every probability is a finite sum, so the miss rate is exact down to
+10^-700 and the exponent and the critical edit fraction come out as numbers rather than estimates.
 
-```
-watermark-edits/
-+-- CLAUDE.md                    what this is, roles (session plans / runner implements), conventions
-+-- README.md                    this page
-+-- pyproject.toml               numpy, scipy, matplotlib; dev: pytest      .python-version = 3.13
-+-- .gitignore                   data/, .venv/, .claude/
-|
-+-- docs/
-|   +-- proposal.pdf, proposal.md     the CS578 proposal: setting, E(rho), rho*, approach, 6 refs
-|
-+-- research/                    lit notes, written by the Claude session
-|   +-- TEMPLATE.md
-|   +-- 2026-10-25-greenlist-substitution-exponent-litreview.md   ARS lit review, 33 verified sources
-|   +-- 2026-10-25-greenlist-substitution-exponent.md             question, what's known, gap, picked idea
-|
-+-- plans/                       one plan per experiment, < 40 lines, written by the session after grilling
-|   +-- TEMPLATE.md
-|   +-- 2026-10-25-greenlist-substitution-exponent.md             round 1: exact exponent, two-level i.i.d.
-|
-+-- results/                     run notes, written by the experiment-runner (<= 15 lines each)
-|   +-- figures/<slug>-<name>.png     curated copies of figures a note cites
-|
-+-- code/                        experiment code, written by the runner from a plan
-|   +-- exponent_greenlist.py         (planned) one script per plan slug, flags with defaults
-|   +-- wmsim/                        (later) shared package once two scripts share something
-|
-+-- data/                        gitignored, lives on the compute box
-    +-- results/<slug>/               csv, json
-    +-- figures/<slug>/               png
+## What is computed
 
-   research/<slug>.md  --grill-->  plans/<slug>.md  --runner-->  code/ + data/  -->  results/<slug>.md
-          ^                                                                               |
-          +----------------------- next smallest step (new plan, From: results/) <--------+
+Setting. A generator emits tokens from a next-token law p_t over a vocabulary V. The key is a sequence of
+independent green lists G_t, each token green with probability gamma; the watermarked token is drawn from
+p~_t(v) proportional to p_t(v) e^{delta 1[v in G_t]}. The attacker makes at most floor(rho n) substitutions; it knows
+gamma, delta and p_t but not the key, and sees G_t at each position independently with probability lambda. The
+detector knows the key, sees the edited text, and keeps its false-positive rate at or below alpha on any text written
+without the key.
+
+Quantities. beta_n(alpha, rho, lambda) is the miss rate at length n. E_n = -ln beta_n / n is the finite-n exponent
+and E(rho) its limit; rho* is the smallest rho at which E(rho) = 0. Two detectors are computed: the green count,
+and the Neyman-Pearson test that knows the attack rule and each position's entropy level but not which positions
+were edited. Closed-form comparisons: the Cramer rate function at the finite-n threshold, the KL lower bound
+D(Bern(gamma) || Bern(qbar)), and the mean-crossing root rho*.
+
+## Install
+
+Requires Python 3.13 (pinned in .python-version) and [uv](https://docs.astral.sh/uv/).
+
+```bash
+uv sync
 ```
 
-## Experiment workflow (plans/2026-10-25-greenlist-substitution-exponent.md)
+This creates .venv with the versions pinned in uv.lock (numpy 2.5.4, scipy 1.18.1, matplotlib 3.11.2). Without uv,
+any recent numpy, scipy and matplotlib work; only the two Monte Carlo numbers (q_L and the diagnostic) can then differ
+in the fourth decimal.
 
-```
- TOKEN MODEL (i.i.d., V = 50k)                           KEY AND LEAKAGE
- +----------------------------------+                    +-----------------------------------+
- | position is                      |                    | G_t: each token green w.p. gamma  |
- |  high-entropy w.p. pi (uniform)  |                    | (independent lists per position)  |
- |  low-entropy  otherwise          |                    | attacker sees G_t w.p. lambda     |
- |  (top token 0.9, rest uniform)   |                    +-----------------+-----------------+
- +----------------+-----------------+                                      |
-                  |                                                        |
-                  v                                                        |
- +----------------------------------+   per-level green posterior          |
- | q_H = g e^d / (g e^d + 1 - g)    |   (prob the watermarked token        |
- | q_L = Monte Carlo over G, 1e5    |    is green, before any edit)        |
- | diagnostic: P(top in G | tail y) |                                      |
- +----------------+-----------------+                                      |
-                  |                                                        |
-                  v                                                        v
- +------------------------------------------------------------------------------------+
- | ATTACKER  budget floor(rho n); knows gamma, delta, p_t, text; never the key         |
- |   1. leaked GREEN tokens first     -> forced red; a leaked red costs no edit       |
- |   2. then highest q_t (high-ent.)  -> replacement colour Bern(gamma)               |
- |   output: per-level, per-leak-status substitution counts  ->  q'_t per position    |
- +----------------------------+---------------------------------+---------------------+
-                              |                                 |
-                              v                                 v
- +------------------------------------------+   +----------------------------------------+
- | GREEN COUNT  (exact)                     |   | ORACLE NP  (exact)                     |
- | null : Bin(n, gamma) -> tau_n at alpha   |   | knows rho, lambda, pi, each position's |
- | alt  : class binomials, mixed over K     |   | level; NOT the edited positions        |
- |        (log space, no beta floor)        |   | LR on the (greens_H, greens_L) grid:   |
- | n in {100..2000}; 10000 at lambda=0      |   | alt: mixture over leaked greens; exact |
- +--------------------+---------------------+   +-------------------+--------------------+
-                      |                                             |
-                      v                                             |
- +------------------------------------------+                       |
- | E_n(rho) = -ln beta_n / n at each n       |                       |
- |          rate at tau_n/n (lambda=0 only)  |                       |
- |          KL(Bern g || Bern qbar_rho) bound|                       |
- | rho^*_n  where beta_n crosses 1/2         |                       |
- | rho*_n   mean rate = tau_n/n; rho* at g   |                       |
- +--------------------+---------------------+                       |
-                      |                                             |
-                      v                                             v
- +------------------------------------------------------------------------------------+
- | OUTPUTS  data/results/<slug>/{beta,exponents,rhostar}.csv, diagnostic.json           |
- |          data/figures/<slug>/exponent_vs_rho.png  (one panel per lambda)            |
- |          -> results/figures/<slug>-exponent_vs_rho.png, results/<slug>.md           |
- | WORKS WHEN  lambda=0: E_n > 0 at every rho; E_2000 within 5% of rate at tau_n/n     |
- |             rho^*_n within 0.05 of rho*_n at every lambda and n                     |
- |             oracle NP never below green count; diagnostic numbers given              |
- +------------------------------------------------------------------------------------+
+## Usage
 
- grid: gamma 0.25, delta 2, alpha 1e-3, pi 0.5, rho in {0, 0.05, ..., 0.95}, lambda in {0, .25, .5, .75, 1}, seed 0
+```bash
+uv run python code/exponent_greenlist.py --seed 0
 ```
 
-- Setup on the box: `uv sync`; run any script with `uv run python code/<script>.py --help`.
+The default run covers rho in {0, 0.05, ..., 0.95}, lambda in {0, 0.25, 0.5, 0.75, 1} and n in {100, 200, 500, 1000,
+2000}, plus n = 10 000 at lambda = 0, and takes about ten seconds on a laptop CPU. Every flag has a default:
+
+| flag | default | meaning |
+|---|---|---|
+| `--gamma` | 0.25 | green fraction |
+| `--delta` | 2.0 | logit bias on green tokens |
+| `--V` | 50000 | vocabulary size |
+| `--pi` | 0.5 | probability that a position is high entropy (uniform over V); otherwise top token 0.9 |
+| `--alpha` | 1e-3 | false-positive rate the threshold is calibrated to |
+| `--rho-grid` | 0 0.05 ... 0.95 | edit fractions |
+| `--lambda-grid` | 0 0.25 0.5 0.75 1 | leakage probabilities |
+| `--n-list` | 100 200 500 1000 2000 | text lengths (n = 10 000 is added at lambda = 0) |
+| `--trials` | 100000 | Monte Carlo key draws for q_L and the diagnostic |
+| `--seed` | 0 | seed of the Monte Carlo parts; everything else is deterministic |
+| `--out` | data | output root |
+
+Numbers to expect at the defaults (seed 0):
+
+| quantity | value |
+|---|---|
+| q_H, q_L, qbar | 0.7112, 0.3669, 0.5391 |
+| E_2000 at rho = 0 (green count) | 0.1570; 0.1775 at n = 10 000; limit I(gamma) = 0.1955 |
+| rho* for lambda = 0, 0.25, 0.5, 0.75, 1 | 1.000, 0.469, 0.312, 0.289, 0.289 |
+| rho_hat*_2000 for the same lambda | 0.736, 0.405, 0.268, 0.268, 0.268 |
+| P(top token green given a tail token was emitted), spike level | 0.0530 (closed form), 0.0523 (Monte Carlo) |
+
+`diagnostic.json` also records seven self-checks (outputs exist; E_n > 0 at lambda = 0; E_2000 within 5 % of the rate
+at the finite-n threshold where -ln beta_2000 >= 100; the n = 10 000 exponent closer to the limit; rho_hat*_n within 0.05
+of rho*_n; the NP test never weaker than the green count; the diagnostic reported). All pass at the defaults.
+
+## Layout and workflow
+
+Each block names the source its model or formula comes from and the functions that implement it.
+
+```
+ watermark-edits/
+ +-- README.md
+ +-- pyproject.toml, uv.lock, .python-version      numpy, scipy, matplotlib; Python 3.13
+ +-- code/exponent_greenlist.py                    the whole experiment in one script (L = line number below)
+ +-- data/            created by the run, untracked: results/<slug>/*.csv, *.json; figures/<slug>/*.png
+ +-- results/figures/ created by the run, untracked: a copy of the figure
+
+ question: E(rho) = lim -(1/n) log beta_n at fixed alpha;  rho* = the first rho with E(rho) = 0
+         |
+         v
+ +-- TOKEN MODEL ------------------------------------------------------------------------------------------------+
+ |  i.i.d. positions. Uniform over V = 50 000 w.p. pi = 0.5; otherwise top token 0.9, rest uniform.             |
+ |  lit:  Li et al. 2025 sec. 5.1 (synthetic spike distributions); Kirchenbauer et al. 2023 Thm 4.2 (entropy)   |
+ |  code: level_counts L62                                                                                      |
+ +--------------------------------------------------------------------------------------------------------------+
+         |
+         v
+ +-- KEY AND LEAKAGE --------------------------------------------------------------------------------------------+
+ |  Fresh list per position, each token green w.p. gamma. The attacker sees G_t w.p. lambda.                    |
+ |  lit:  Kirchenbauer et al. 2023 (scheme); Zhao et al. 2024 App. D (what hashing would add);                  |
+ |        Zhang et al. 2024, Jovanovic et al. 2024 (list recovery from the API, the realistic lambda range)     |
+ |  code: gamma enters pmf(., gamma) and threshold L69; keys are drawn only in q_levels L78                     |
+ +--------------------------------------------------------------------------------------------------------------+
+         |
+         v
+ +-- GREEN PROBABILITY PER LEVEL --------------------------------------------------------------------------------+
+ |  q_H = 0.711 (uniform), q_L = 0.367 (spike); diagnostic P(top token green | tail token emitted) = 0.053      |
+ |  lit:  Kirchenbauer et al. 2023 sec. 3 (the tilt); Jensen on g(x) = e^delta x / (e^delta x + 1 - x)          |
+ |  code: green_prob L34, q_levels L78, spike_diagnostic L87                                                    |
+ +--------------------------------------------------------------------------------------------------------------+
+         |
+         v
+ +-- ATTACKER ---------------------------------------------------------------------------------------------------+
+ |  Budget floor(rho n): leaked greens -> red (one edit each), then unleaked uniform positions, then spike;     |
+ |  replacement green w.p. gamma where the list is unseen; the leaked-green count K is random, laws exact in K. |
+ |  lit:  Wu and Chandrasekaran 2024 Thm 1 (colour-agnostic replacement)                                        |
+ |  code: class_weights L185 (K at its mean); gc_tables L109 and np_alt L151 (exact mixture over K)             |
+ +--------------------------------------------------------------------------------------------------------------+
+         |
+         +------------------------------------------------+
+         v                                                v
+ +-- GREEN COUNT (exact, log space) ------------+   +-- ORACLE NP (exact, 2-D grid) -------------------------+
+ |  null Bin(n, gamma), threshold at alpha;     |   |  likelihood ratio on (greens_H, greens_L); knows the   |
+ |  alternative = convolutions mixed over K.    |   |  attack rule and levels, not the edited positions.      |
+ |  lit:  Kirchenbauer et al. 2023 z-test;      |   |  lit:  Neyman-Pearson lemma; Li et al. 2025            |
+ |        Fernandez et al. 2023 (exact tests)   |   |        (detection efficiency = exponent at fixed alpha)|
+ |  code: threshold L69, gc_tables L109,        |   |  code: np_tables L139, np_alt L151, np_test L174       |
+ |        log_beta_gc L127                      |   |                                                        |
+ +----------------------------------------------+   +--------------------------------------------------------+
+         |                                                |
+         +------------------------------------------------+
+         v
+ +-- EXPONENT AND CRITICAL FRACTION -----------------------------------------------------------------------------+
+ |  E_n = -ln beta_n / n at each n; Cramer rate at the finite-n threshold tau_n/n; KL lower bound;              |
+ |  rho_hat*_n = where beta_n crosses 1/2; rho*_n = mean green rate crosses tau_n/n; rho* = the same at gamma.  |
+ |  lit:  Cover and Thomas sec. 11.8 (Stein's lemma); Cramer's theorem; Hoeffding 1963 (KL form of the bound)   |
+ |  code: rate L196, kl_bern L212, rho_star L217                                                                |
+ +--------------------------------------------------------------------------------------------------------------+
+         |
+         v
+ +-- OUTPUTS ----------------------------------------------------------------------------------------------------+
+ |  data/results/<slug>/beta.csv        per (n, lambda, rho): threshold, exact sizes, log10 beta, class counts  |
+ |  data/results/<slug>/exponents.csv   E_gc, E_np, I_n(tau_n/n), I_n(gamma), KL bound per (lambda, rho, n)     |
+ |  data/results/<slug>/rhostar.csv     rho_hat*_n, rho*_n, rho* per (lambda, n)                                |
+ |  data/results/<slug>/diagnostic.json q_H, q_L, the spike diagnostic, the self-checks, the parameters         |
+ |  data/figures/<slug>/exponent_vs_rho.png and a copy under results/figures/                                   |
+ |  code: plot L224, write_csv L280, main L287                                                                  |
+ +--------------------------------------------------------------------------------------------------------------+
+```
+
+## Conventions
+
+- Deterministic computation everywhere except q_L and the diagnostic, which are seeded Monte Carlo with their standard
+  errors reported.
+- The threshold is calibrated to alpha on text written without the key (null = fresh random key), never assumed from a
+  normal approximation; the realised sizes of both tests are written to beta.csv.
+- The attack budget is exact: at most floor(rho n) substitutions, and beta.csv records the expected number used.
+- Level and leak counts are fixed at their expectations; the key stays random, so the number of greens the attacker can
+  see is binomial and every law is the exact mixture over it. Oracle-NP cells whose miss rate is exactly zero are
+  reported as such, not as a small number.
+
+## References
+
+- Kirchenbauer, J., Geiping, J., Wen, Y., Katz, J., Miers, I., Goldstein, T. (2023). A watermark for large language
+  models. ICML 2023, PMLR 202:17061-17084.
+- Li, X., Ruan, F., Wang, H., Long, Q., Su, W. J. (2025). A statistical framework of watermarks for large language
+  models: pivot, detection efficiency and optimal rules. Annals of Statistics 53(1):322-351.
+- Wu, Q., Chandrasekaran, V. (2024). Bypassing LLM watermarks with color-aware substitutions. ACL 2024, 8549-8581.
+- Zhao, X., Ananth, P., Li, L., Wang, Y.-X. (2024). Provable robust watermarking for AI-generated text. ICLR 2024.
+- Fernandez, P., Chaffin, A., Tit, K., Chappelier, V., Furon, T. (2023). Three bricks to consolidate watermarks for
+  large language models. IEEE WIFS 2023.
+- Zhang, Z. et al. (2024). Large language model watermark stealing with mixed integer programming. ACSAC 2024, 46-60.
+- Jovanovic, N., Staab, R., Vechev, M. (2024). Watermark stealing in large language models. ICML 2024.
+- Cover, T. M., Thomas, J. A. (2006). Elements of Information Theory, 2nd ed., sec. 11.8 (Chernoff-Stein lemma).
+- Hoeffding, W. (1963). Probability inequalities for sums of bounded random variables. JASA 58(301):13-30.
