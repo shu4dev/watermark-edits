@@ -24,6 +24,10 @@ and the Neyman-Pearson test that knows the attack rule and each position's entro
 were edited. Closed-form comparisons: the Cramer rate function at the finite-n threshold, the KL lower bound
 D(Bern(gamma) || Bern(qbar)), and the mean-crossing root rho*.
 
+The critical fraction answers one question: at what edit fraction does more text stop helping the detector? It
+depends on gamma, delta, pi and lambda, not on n or alpha. The reported rho* is for the green count against the attack
+rule in the diagram below. It is not a minimax value over all detectors and attackers.
+
 ## Install
 
 Requires Python 3.13 (pinned in .python-version) and [uv](https://docs.astral.sh/uv/).
@@ -55,6 +59,7 @@ The default run covers rho in {0, 0.05, ..., 0.95}, lambda in {0, 0.25, 0.5, 0.7
 | `--rho-grid` | 0 0.05 ... 0.95 | edit fractions |
 | `--lambda-grid` | 0 0.25 0.5 0.75 1 | leakage probabilities |
 | `--n-list` | 100 200 500 1000 2000 | text lengths (n = 10 000 is added at lambda = 0) |
+| `--fixed-lambda` | 0.25 | leakage held fixed in the second figure; must be in `--lambda-grid` |
 | `--trials` | 100000 | Monte Carlo key draws for q_L and the diagnostic |
 | `--seed` | 0 | seed of the Monte Carlo parts; everything else is deterministic |
 | `--out` | data | output root |
@@ -66,25 +71,31 @@ Numbers to expect at the defaults (seed 0):
 | q_H, q_L, qbar | 0.7112, 0.3669, 0.5391 |
 | E_2000 at rho = 0 (green count) | 0.1570; 0.1775 at n = 10 000; limit I(gamma) = 0.1955 |
 | rho* for lambda = 0, 0.25, 0.5, 0.75, 1 | 1.000, 0.469, 0.312, 0.289, 0.289 |
-| rho_hat*_2000 for the same lambda | 0.736, 0.405, 0.268, 0.268, 0.268 |
+| green-count miss rate at lambda = 0, rho = 0.75 | 0.56 at n = 2000, 0.0002 at n = 10 000 |
 | P(top token green given a tail token was emitted), spike level | 0.0530 (closed form), 0.0523 (Monte Carlo) |
 
 `diagnostic.json` also records seven self-checks (outputs exist; E_n > 0 at lambda = 0; E_2000 within 5 % of the rate
-at the finite-n threshold where -ln beta_2000 >= 100; the n = 10 000 exponent closer to the limit; rho_hat*_n within 0.05
-of rho*_n; the NP test never weaker than the green count; the diagnostic reported). All pass at the defaults.
+at the finite-n threshold where -ln beta_2000 >= 100; the n = 10 000 exponent closer to the limit; below rho*, beta
+falling from the smallest to the largest n, and above it beta_2000 >= 0.999; the NP test never weaker than the green count; the diagnostic reported). All pass at the defaults.
 
-## Figure
+## Figures
 
-![Exponent against edit fraction, one panel per leakage level](figures/exponent_vs_rho.png)
+Both figures plot the exponent E_n = -ln beta_n / n against the edit fraction rho. Every panel has two curves, the green
+count and the oracle Neyman-Pearson ceiling, and a solid black line at the critical fraction rho*. Higher is better for
+the detector, and zero means that length of text no longer helps. At these lengths the green count falls to about zero
+before the line, because the fixed-alpha threshold sits above gamma. The line does not move with n: at lambda = 0.25 it is at 0.469 in every panel.
 
-The default run (`--seed 0`), one panel per leakage level lambda. Higher is better for the detector: the exponent is
-the number of nats each token adds against the miss probability, and zero means no text length recovers the
-watermark. Blue dots are the green count at n = 2000, orange dots the oracle Neyman-Pearson ceiling at n = 2000.
-At lambda = 0 the open circles are the green count at n = 10 000, the dashed green curve is the Cramer rate at the
-n = 2000 threshold (it lies on the blue dots), the solid green curve is the n -> infinity rate I(gamma), and the grey
-curve is the KL lower bound. Vertical lines: solid, where beta_2000 crosses 1/2; dashed, where the mean green rate
-crosses the n = 2000 threshold; dotted, the limit rho*. The orange rise past rho* at lambda >= 0.5 is the
-full-budget attacker becoming detectable as too red, not a property of the watermark.
+Fixed document length, n = 2000, with one panel per leakage level lambda:
+
+![Exponent against edit fraction at n = 2000, one panel per leakage level](figures/exponent_fixed_length.png)
+
+Fixed leakage, lambda = 0.25, with one panel per document length n:
+
+![Exponent against edit fraction at lambda = 0.25, one panel per document length](figures/exponent_fixed_leakage.png)
+
+Where the oracle stays above zero after the green count reaches it, this attack has left the two entropy levels at
+different green rates, or has turned the text too red. The oracle's curve stops early at lambda = 1 because its miss rate
+is exactly zero from there on.
 
 ## Layout and workflow
 
@@ -99,7 +110,8 @@ Each block names the source its model or formula comes from and the file that im
  |                                              attack.py, greencount.py,
  |                                              oraclenp.py, exponent.py
  +-- data/             created by the run, untracked: csv, json, png
- +-- results/figures/  created by the run, untracked: a copy of the figure
+ +-- results/figures/  created by the run, untracked: copies of the figures
+ +-- figures/          tracked copies of the two figures shown above
 
  question:  E(rho) = lim -(1/n) log beta_n at fixed alpha
             rho*   = the first rho with E(rho) = 0
@@ -163,10 +175,10 @@ Each block names the source its model or formula comes from and the file that im
          |
          v
  +-- EXPONENT AND CRITICAL FRACTION -------------------------------------------+
- |  E_n = -ln beta_n / n at each n; Cramer rate at the finite-n               |
- |  threshold tau_n/n; KL lower bound.                                        |
- |  rho_hat*_n = where beta_n crosses 1/2;                                    |
- |  rho*_n = mean green rate crosses tau_n/n; rho* = the same at gamma.       |
+ |  E_n = -ln beta_n / n for each detector, plotted against rho.              |
+ |  Self-checks, not plotted: Cramer rate at tau_n/n, KL bound, beta by n.    |
+ |  rho* = the edit fraction where the mean green rate reaches gamma;         |
+ |  more text stops helping the green count. Black line in the figures.       |
  |  lit:  Cover and Thomas sec. 11.8 (Stein's lemma); Cramer's                |
  |        theorem; Hoeffding 1963 (KL form of the bound)                      |
  |  code: wmsim/exponent.py                                                   |
@@ -178,9 +190,11 @@ Each block names the source its model or formula comes from and the file that im
  |    beta.csv        per (n, lambda, rho): threshold, exact sizes,           |
  |                    log10 beta, class counts                                |
  |    exponents.csv   E_gc, E_np, I_n(tau_n/n), I_n(gamma), KL bound          |
- |    rhostar.csv     rho_hat*_n, rho*_n, rho* per (lambda, n)                |
+ |    rhostar.csv     rho*, green rate per level at rho*, per lambda          |
  |    diagnostic.json q_H, q_L, spike diagnostic, self-checks, params         |
- |  data/figures/<slug>/exponent_vs_rho.png, copied to results/figures/       |
+ |  data/figures/<slug>/, copied to results/figures/                          |
+ |    exponent_fixed_length.png   n = 2000, one panel per lambda              |
+ |    exponent_fixed_leakage.png  lambda = 0.25, one panel per n              |
  |  code: exponent_greenlist.py                                               |
  +----------------------------------------------------------------------------+
 ```

@@ -17,8 +17,8 @@ K_l ~ Bin(L_l, q_l) are random and every law below is the exact mixture over (K_
 Green count: exact Bin(n, gamma) threshold tau_n, alternative in log space; E_n = -ln beta_n / n at each n,
 plus n = N_BIG at lambda = 0 (green count only). Oracle NP: exact non-randomised likelihood-ratio test on the
 (S_H, S_L) grid of per-level green counts, linear space. At lambda = 0 (K = 0, class counts exact): Cramer rates
-I_n(tau_n / n), I_n(gamma) and D(Bern(gamma) || Bern(qbar)). rho_hat*_n: beta_n crosses 1/2 (interpolated on
-the grid); rho*_n, rho*: roots in rho of the K-at-mean green rate minus tau_n / n, resp. gamma.
+I_n(tau_n / n), I_n(gamma) and D(Bern(gamma) || Bern(qbar)). rho*: root in rho of the K-at-mean green rate minus
+gamma, one number per lambda, free of n and alpha; rhostar.csv also gives the green rate per level there.
 """
 import argparse
 import csv
@@ -30,7 +30,7 @@ from pathlib import Path
 import numpy as np
 from scipy.stats import binom
 
-from wmsim.attack import class_weights
+from wmsim.attack import allocate, class_weights
 from wmsim.exponent import kl_bern, rate, rho_star
 from wmsim.greencount import gc_tables, log_beta_gc, threshold
 from wmsim.oraclenp import np_alt, np_tables, np_test
@@ -41,60 +41,59 @@ SLUG = "2026-10-25-greenlist-substitution-exponent"
 N_BIG = 10_000      # extra n, lambda = 0 only: green count, no NP grid (plan amendment 2026-10-28)
 
 
-# ---------------------------------------------------------------- figure
-def plot(exps, star, lam_grid, n_ref, n_big, path):
+# ---------------------------------------------------------------- figures
+def plot(exps, star, lam_grid, n_list, n_ref, fixed_lam, paths):
+    """Two figures on one y-scale, each changing one setting: n = n_ref with a panel per lambda, then lambda =
+    fixed_lam with a panel per n. Panels fill a three-column grid; the next cell holds the legend and the fixed setting.
+    Every panel marks the rho* of its lambda with a black vertical line."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    ink, ink2, muted, gridc, axc, surf = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
-    c_gc, c_np, c_rate = "#2a78d6", "#eb6834", "#1baf7a"
+    ink, ink2, gridc, axc, surf = "#0b0b0b", "#52514e", "#e1e0d9", "#c3c2b7", "#fcfcfb"
+    c_gc, c_np = "#2a78d6", "#eb6834"
     col = lambda lam, n, k: np.array([x[k] if np.isfinite(x[k]) else np.nan
                                       for x in exps if x["lambda"] == lam and x["n"] == n], float)
-    vals = np.concatenate([col(lam, n, k) for lam in lam_grid for n in (n_ref, n_big)
-                           for k in ("E_gc", "E_np", "I_n_tau", "I_n_gamma", "kl_mean")])
-    top = 1.08 * np.nanmax(vals)
-    fig, axes = plt.subplots(1, len(lam_grid), figsize=(3.0 * len(lam_grid), 3.5), sharey=True, facecolor=surf)
-    axes = np.atleast_1d(axes)
+    figs = [(paths[0], f"n = {n_ref}", [(f"λ = {lam:g}", lam, n_ref) for lam in lam_grid]),
+            (paths[1], f"λ = {fixed_lam:g}", [(f"n = {n}", fixed_lam, n) for n in n_list])]
+    top = 1.08 * np.nanmax(np.concatenate([col(lam, n, k) for _, _, panels in figs for _, lam, n in panels
+                                           for k in ("E_gc", "E_np")]))
     mk = dict(marker="o", ms=4.5, mec=surf, mew=1.2)
-    for ax, lam in zip(axes, lam_grid):
-        rho = col(lam, n_ref, "rho")
-        s = next(x for x in star if x["lambda"] == lam and x["n"] == n_ref)
-        ax.set_facecolor(surf)
-        if lam == 0:
-            ax.plot(rho, col(lam, n_ref, "kl_mean"), color=muted, lw=1.5, ls="-.",
-                    label="KL(Bern(γ) ‖ Bern(q̄ρ)): lower bound on I(γ)")
-            ax.plot(rho, col(lam, n_ref, "I_n_gamma"), color=c_rate, lw=2, label="I(γ): Cramér rate at γ (n → ∞)")
-            ax.plot(rho, col(lam, n_ref, "I_n_tau"), color=c_rate, lw=1.5, ls="--",
-                    label=f"$I_{{{n_ref}}}(\\tau/n)$: Cramér rate at the n = {n_ref} threshold")
-            ax.plot(rho, col(lam, n_big, "E_gc"), color=c_gc, lw=1.5, ls="--", marker="o", ms=4.5, mfc=surf,
-                    mec=c_gc, mew=1.2, label=f"green count: $E_{{{n_big}}}$ (λ = 0 only)")
-        ax.plot(rho, col(lam, n_ref, "E_np"), color=c_np, lw=2, label=f"oracle NP: $E_{{{n_ref}}}$ = −ln β/n", **mk)
-        ax.plot(rho, col(lam, n_ref, "E_gc"), color=c_gc, lw=2, label=f"green count: $E_{{{n_ref}}}$ = −ln β/n", **mk)
-        ax.axvline(s["rho_star"], color=muted, lw=1.2, ls=":", label="ρ*: mean crossing at γ (n → ∞)")
-        ax.axvline(s["rho_star_n"], color=ink2, lw=1.0, ls="--", label=f"$\\rho^*_{{{n_ref}}}$: mean crossing at τ/n")
-        if np.isfinite(s["rho_hat_n"]):
-            ax.axvline(s["rho_hat_n"], color=ink, lw=1.0, label=f"$\\hat\\rho^*_{{{n_ref}}}$: β = 1/2")
-        ax.set_title(f"λ = {lam:g}", color=ink, fontsize=10)
-        ax.set_xlim(-0.03, 1.03)
-        ax.set_ylim(min(-0.01, np.nanmin(vals) - 0.01), top)
-        ax.grid(color=gridc, lw=0.8)
-        ax.set_axisbelow(True)
-        for side in ("top", "right"):
-            ax.spines[side].set_visible(False)
-        for side in ("left", "bottom"):
-            ax.spines[side].set_color(axc)
-        ax.tick_params(colors=ink2, labelsize=8)
-        ax.set_xlabel("edit fraction ρ", color=ink2, fontsize=9)
-    axes[0].set_ylabel("exponent (nat/token)", color=ink2, fontsize=9)
-    hl = {}
-    for ax in axes:
-        for hd, lb in zip(*ax.get_legend_handles_labels()):
-            hl.setdefault(lb, hd)
-    fig.legend(list(hl.values()), list(hl.keys()), loc="lower center", ncol=3, frameon=False, fontsize=8,
-               labelcolor=ink, bbox_to_anchor=(0.5, 1.0))
-    fig.tight_layout()
-    fig.savefig(path, dpi=150, facecolor=surf, bbox_inches="tight")
-    plt.close(fig)
+    rs = {s["lambda"]: s["rho_star"] for s in star}
+    for path, fixed, panels in figs:
+        rows = len(panels) // 3 + 1
+        fig, axes = plt.subplots(rows, 3, figsize=(9, 2.75 * rows), sharex=True, sharey=True, facecolor=surf)
+        cells = axes.ravel()
+        for i, (ax, (title, lam, n)) in enumerate(zip(cells, panels)):
+            rho = col(lam, n, "rho")
+            ax.set_facecolor(surf)
+            if lam in rs:  # added first: behind the markers, last in the reversed legend
+                ax.axvline(rs[lam], color="black", ls="-", lw=1.2, label="critical fraction ρ*")
+            ax.plot(rho, col(lam, n, "E_np"), color=c_np, lw=2, label="oracle NP", **mk)
+            ax.plot(rho, col(lam, n, "E_gc"), color=c_gc, lw=2, label="green count", **mk)
+            ax.set_title(title, color=ink, fontsize=11)
+            ax.set_xlim(-0.03, 1.03)
+            ax.set_ylim(-0.01, top)
+            ax.grid(color=gridc, lw=0.8)
+            ax.set_axisbelow(True)
+            for side in ("top", "right"):
+                ax.spines[side].set_visible(False)
+            for side in ("left", "bottom"):
+                ax.spines[side].set_color(axc)
+            ax.tick_params(colors=ink2, labelsize=10)
+            if i >= len(panels) - 3:  # no panel below this one, so it carries the x-axis
+                ax.tick_params(labelbottom=True)
+                ax.set_xlabel("edit fraction ρ", color=ink2, fontsize=10)
+        for ax in cells[len(panels):]:
+            ax.axis("off")
+        hd, lb = cells[0].get_legend_handles_labels()
+        key = cells[len(panels)]
+        key.legend(hd[::-1], lb[::-1], loc="lower center", bbox_to_anchor=(0.5, 0.5), frameon=False, fontsize=11,
+                   labelcolor=ink)
+        key.text(0.5, 0.4, fixed, transform=key.transAxes, ha="center", va="top", color=ink, fontsize=11)
+        fig.supylabel("exponent $E_n$ = −ln β / n (nat/token)", color=ink2, fontsize=10)
+        fig.tight_layout()
+        fig.savefig(path, dpi=150, facecolor=surf)
+        plt.close(fig)
 
 
 # ---------------------------------------------------------------- main
@@ -115,10 +114,14 @@ def main():
     ap.add_argument("--rho-grid", type=float, nargs="+", default=[round(0.05 * i, 2) for i in range(20)])
     ap.add_argument("--lambda-grid", type=float, nargs="+", default=[0.0, 0.25, 0.5, 0.75, 1.0])
     ap.add_argument("--n-list", type=int, nargs="+", default=[100, 200, 500, 1000, 2000])
+    ap.add_argument("--fixed-lambda", type=float, default=0.25,
+                    help="leakage held fixed in exponent_fixed_leakage.png; must be in --lambda-grid")
     ap.add_argument("--trials", type=int, default=100_000, help="Monte Carlo key draws (q_L and the diagnostic)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="data", help="writes <out>/results/<slug>/ and <out>/figures/<slug>/")
     args = ap.parse_args()
+    if args.fixed_lambda not in args.lambda_grid:
+        ap.error(f"--fixed-lambda {args.fixed_lambda:g} is not in --lambda-grid {args.lambda_grid}")
     t_start = time.perf_counter()
     g, d, n_list = args.gamma, args.delta, sorted(args.n_list)
     rng = np.random.default_rng(args.seed)
@@ -187,24 +190,24 @@ def main():
     for lam in args.lambda_grid:
         fr_inf = np.array([lam * args.pi, lam * (1 - args.pi), (1 - lam) * args.pi, (1 - lam) * (1 - args.pi)])
         rs = rho_star(fr_inf, g, g, qH, qL)
-        for n in sorted({x["n"] for x in rows if x["lambda"] == lam}):
-            r = [x for x in rows if x["lambda"] == lam and x["n"] == n]
-            rho, beta = np.array([x["rho"] for x in r]), 10.0 ** np.array([x["log10_beta_gc"] for x in r])
-            i = int(np.argmax(beta > 0.5))
-            hat = (np.nan if beta[i] <= 0.5 else float(rho[0]) if i == 0
-                   else float(np.interp(0.5, beta[i - 1: i + 1], rho[i - 1: i + 1])))
-            rn = rho_star(np.array(level_counts(n, lam, args.pi)[2:]) / n, r[0]["tau"] / n, g, qH, qL)
-            star.append({"lambda": lam, "n": n, "tau_over_n": r[0]["tau"] / n, "rho_hat_n": hat,
-                         "rho_star_n": rn, "diff": hat - rn, "rho_star": rs})
+        LH, LL, UH, UL = fr_inf
+        kH, kL = LH * qH, LL * qL
+        flip, eH, eL = allocate(rs, kH + kL, UH, UL)  # K at its mean, the accounting of class_weights
+        fH = min(flip, kH)                            # leaked greens flip at the uniform level first
+        star.append({"lambda": lam, "rho_star": rs,
+                     "rate_uniform": (kH - fH + g * eH + qH * (UH - eH)) / args.pi,
+                     "rate_spike": (kL - (flip - fH) + g * eL + qL * (UL - eL)) / (1 - args.pi)})
 
     write_csv(res_dir / "beta.csv", rows)
     write_csv(res_dir / "exponents.csv", exps)
     write_csv(res_dir / "rhostar.csv", star)
-    fig_path = fig_dir / "exponent_vs_rho.png"
-    plot(exps, star, args.lambda_grid, n_ref, N_BIG, fig_path)
-    curated = Path("results/figures") / f"{SLUG}-exponent_vs_rho.png"
-    curated.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(fig_path, curated)
+    fig_names = ("exponent_fixed_length.png", "exponent_fixed_leakage.png")
+    fig_paths = [fig_dir / f for f in fig_names]
+    plot(exps, star, args.lambda_grid, n_list, n_ref, args.fixed_lambda, fig_paths)
+    curated = [Path("results/figures") / f"{SLUG}-{f}" for f in fig_names]
+    curated[0].parent.mkdir(parents=True, exist_ok=True)
+    for src, dst in zip(fig_paths, curated):
+        shutil.copy(src, dst)
 
     # Works-when checks (a)-(f); (g) is the diagnostic block
     e0 = [x for x in exps if x["lambda"] == 0.0]
@@ -217,7 +220,19 @@ def main():
                 "gap_ref": abs(x["E_gc"] - x["I_n_gamma"]), "gap_big": abs(big0[x["rho"]]["E_gc"] - x["I_n_gamma"])}
                for x in ref0 if min(x["E_gc"], big0[x["rho"]]["E_gc"]) > 0.01]
     viol = [x for x in rows if x["log10_beta_np"] > x["log10_beta_gc"] + 1e-9]
-    outputs = [res_dir / f for f in ("beta.csv", "exponents.csv", "rhostar.csv")] + [fig_path, curated]
+    lb = {(x["lambda"], x["n"], x["rho"]): x["log10_beta_gc"] for x in rows}
+    e_below, e_above = [], []
+    for s in star:
+        lam, ns = s["lambda"], sorted({x["n"] for x in rows if x["lambda"] == s["lambda"]})
+        for r in args.rho_grid:
+            if r < s["rho_star"]:
+                e_below.append({"lambda": lam, "rho": r, "n_small": ns[0], "n_large": ns[-1],
+                                "log10_beta_small": lb[lam, ns[0], r], "log10_beta_large": lb[lam, ns[-1], r]})
+            else:
+                e_above.append({"lambda": lam, "rho": r, "log10_beta": lb[lam, n_ref, r]})
+    e_fail_below = [c for c in e_below if not c["log10_beta_large"] < c["log10_beta_small"]]
+    e_fail_above = [c for c in e_above if not c["log10_beta"] >= np.log10(0.999)]
+    outputs = [res_dir / f for f in ("beta.csv", "exponents.csv", "rhostar.csv")] + fig_paths + curated
     checks = {
         "a_outputs_exist": all(p.exists() for p in outputs),
         "b_lambda0_E_positive_all_rho_n": all(x["E_gc"] > 0 for x in e0),
@@ -228,8 +243,12 @@ def main():
         "d_cells": d_cells,
         "d_big_closer_all": bool(d_cells) and all(c["gap_big"] < c["gap_ref"] for c in d_cells),
         "d_I_gamma_spread_over_n": max(np.ptp([x["I_n_gamma"] for x in e0 if x["rho"] == r]) for r in big0),
-        "e_max_abs_diff": float(np.nanmax([abs(s["diff"]) for s in star])),
-        "e_within_0.05_all": all(abs(s["diff"]) <= 0.05 for s in star),
+        "e_cells_below_rho_star": len(e_below),
+        "e_failures_below_rho_star": e_fail_below,
+        "e_cells_at_or_above_rho_star": len(e_above),
+        "e_failures_at_or_above_rho_star": e_fail_above,
+        "e_min_beta_n_ref_above_rho_star": 10.0 ** min((c["log10_beta"] for c in e_above), default=np.nan),
+        "e_all_pass": not (e_fail_below or e_fail_above),
         "f_np_above_gc_cells": [{k: x[k] for k in ("n", "lambda", "rho", "log10_beta_gc", "log10_beta_np",
                                                     "alpha_gc", "alpha_np")} for x in viol],
         "f_all_explained_by_discreteness": bool(all(x["alpha_gc"] > x["alpha_np"] for x in viol)),
@@ -251,14 +270,16 @@ def main():
         y = big0[x["rho"]]
         print(f"  {x['rho']:.2f}  {x['E_gc']:.5f}  {x['I_n_tau']:.5f}  {(x['E_gc'] - x['I_n_tau']) / x['I_n_tau'] if x['I_n_tau'] > 0 else np.inf:+.4f}"
               f"  {y['E_gc']:.5f}  {x['I_n_gamma']:.5f}  {x['kl_mean']:.5f}")
-    print("rho_hat*_n vs rho*_n (and rho*):")
+    print("rho* and the green rate per level there:")
     for s in star:
-        print(f"  lambda={s['lambda']:.2f} n={s['n']:5d} tau/n={s['tau_over_n']:.4f} rho_hat*_n={s['rho_hat_n']:.4f}"
-              f" rho*_n={s['rho_star_n']:.4f} diff={s['diff']:+.4f} rho*={s['rho_star']:.4f}")
+        print(f"  lambda={s['lambda']:.2f} rho*={s['rho_star']:.4f} uniform={s['rate_uniform']:.4f}"
+              f" spike={s['rate_spike']:.4f}")
     print(json.dumps({k: v for k, v in checks.items() if k not in ("c_cells", "d_cells", "f_np_above_gc_cells")},
                      indent=1, default=float))
     print(f"NP above green count in {len(viol)} cells")
-    print(f"wrote {res_dir}/{{beta,exponents,rhostar}}.csv, diagnostic.json; {fig_path} -> {curated}")
+    print(f"wrote {res_dir}/{{beta,exponents,rhostar}}.csv, diagnostic.json")
+    for src, dst in zip(fig_paths, curated):
+        print(f"wrote {src} -> {dst}")
     print(f"wall time {wall:.1f} s")
 
 if __name__ == "__main__":
