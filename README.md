@@ -6,10 +6,11 @@ A green-list watermark (Kirchenbauer et al. 2023) raises the logits of a secret 
 position; a detector that holds the key decides whether a text carries the watermark. The project report ("Text
 watermark detection under edits") asks how fast the best detector's miss rate can fall with text length when an
 attacker has replaced a fraction rho of the tokens, and at which rho it stops falling. This repository puts numbers
-on that theory in two parts. `code/report_checks.py` recomputes the report's formulas on small instances, where every
+on that theory in three parts. `code/report_checks.py` recomputes the report's formulas on small instances, where every
 probability is a finite sum or a small linear program, and `code/claim1_program.py` solves the report's variational
 program for the exponent on the same instances. `code/exponent_greenlist.py` computes miss rates down to 10^-700 for
 two fixed detectors in a larger token model with two entropy levels, an instance the report does not contain.
+`code/llm_edits.py` and `code/llm_edits_kgw.py` run three attackers on text that a real language model wrote.
 
 ## What is computed
 
@@ -68,6 +69,49 @@ and lambda, not on n or alpha. It is not the report's rho*. The attack rule here
 the text, which is weaker than the key-blind attacker of the setting above, and the per-level count test is a ceiling
 for tests that use those counts, not for every detector. A text-aware attack rule for this model is the next round.
 
+### Part 3: a real language model
+
+`llm_edits.py` and `llm_edits_kgw.py` leave the token models. OPT-1.3B continues 500 news prompts (the RealNews-like
+subset of C4) by 200 tokens under the watermark, with gamma = 0.25 and delta = 2. Three attackers then edit each text
+within the same budget of floor(rho n) substitutions, and the green-count detector, at a false-positive rate of 1e-3,
+flags the edited text or misses it. An attacker may replace a token only by one of the 20 likeliest tokens at that
+position.
+
+- Random: random positions, a random candidate.
+- Key-blind: it knows the model's probabilities, gamma and delta, but not the key. From the emitted token it computes
+  the probability that each token is green, with 16 384 simulated lists per position, and edits where a swap is most
+  likely to remove a green token.
+- Key holder: it knows every green list.
+
+`llm_edits.py` uses the report's scheme, an independent green list at every position. `llm_edits_kgw.py` uses the
+published scheme through [lm-watermarking](https://github.com/jwkirchenbauer/lm-watermarking) at a pinned commit
+(scheme `simple_1`), where the list is seeded by the previous token, so one swap also changes the next position's list.
+
+Edit fraction at which half of the 500 texts are missed (seed 0):
+
+| scheme | random | key-blind | key holder | share of the key's value |
+|---|---|---|---|---|
+| report's scheme, independent lists | 0.641 | 0.385 | 0.214 | 0.60 |
+| published scheme, list seeded by the previous token | 0.388 | 0.252 | 0.104 | 0.48 |
+
+The share is (random - key-blind) / (random - key holder). It is 0 if knowing the model is useless to the attacker and
+1 if it is worth as much as the key.
+
+Three more results from the same runs:
+
+- The report's lower bound for the green count, D(Bern(gamma + rho) || Bern(q_min)), needs the green probability q_t
+  to stay above gamma at every position. On this text the smallest q_t equals gamma within simulation error, and 5.5 %
+  of positions lie within 0.01 of it, so the bound promises nothing. The same formula with the average q_t (0.565) is
+  not a valid replacement. At rho = 0.05 the key holder already defeats 1 text in 500, against a predicted 3e-5,
+  because the average q_t of a single text ranges from 0.40 to 0.65.
+- Inequality (2), the report's floor on q_t, holds with a mean gap of 0.20 (quartiles 0.16, 0.24, 0.27).
+- Under the published scheme the binomial threshold of 71 green tokens does not keep the false-positive rate: 23 of
+  10 000 trials with fresh keys are flagged (2.3e-3), because repeated pairs of (previous token, token) are counted
+  every time. That script moves the threshold to 74, the empirical quantile.
+
+Not measured: the quality of the edited text, other models and other lengths. The key holder under the published scheme
+is a greedy rule and is not claimed optimal.
+
 ## Install
 
 Requires Python 3.13 (pinned in .python-version) and [uv](https://docs.astral.sh/uv/).
@@ -79,6 +123,13 @@ uv sync
 This creates .venv with the versions pinned in uv.lock (numpy 2.5.4, scipy 1.18.1, matplotlib 3.11.2). Without uv,
 any recent numpy, scipy and matplotlib work; only the two Monte Carlo numbers (q_L and the diagnostic) can then differ
 in the fourth decimal.
+
+Part 3 needs a GPU with about 8 GB of memory and the dependency group `llm` (torch 2.15.0, transformers 5.23.0,
+datasets 5.2.0):
+
+```bash
+uv sync --group llm
+```
 
 ## Usage
 
@@ -178,6 +229,40 @@ at the finite-n threshold where -ln beta_2000 >= 100; the n = 10 000 exponent cl
 beta falling from the smallest to the largest n, and above it beta_2000 >= 0.999; the per-level count test never
 weaker than the green count; the diagnostic reported). All pass at the defaults.
 
+Part 3, the report's scheme, takes about 2 minutes on an RTX 3090. It downloads facebook/opt-1.3b (2.6 GB) and streams
+the prompts:
+
+```bash
+uv run --group llm python code/llm_edits.py --seed 0
+```
+
+Part 3, the published scheme, takes about 10 minutes on a T4. It needs the library's clone at the pinned commit on
+PYTHONPATH:
+
+```bash
+git clone https://github.com/jwkirchenbauer/lm-watermarking
+git -C lm-watermarking checkout 82922516930c02f8aa322765defdb5863d07a00e
+PYTHONPATH=lm-watermarking uv run --group llm python code/llm_edits_kgw.py --seed 0
+```
+
+Both scripts take the same flags.
+
+| flag | default | meaning |
+|---|---|---|
+| `--gamma` | 0.25 | green share of the vocabulary |
+| `--delta` | 2.0 | bias added to green logits |
+| `--alpha` | 1e-3 | false-positive rate of the green-count detector |
+| `--n` | 200 | new tokens per text |
+| `--texts` | 500 | number of prompts |
+| `--rho-grid` | 0 0.05 ... 1 | edit fractions |
+| `--lists` | 16384 | simulated green lists behind the key-blind attacker |
+| `--seed` | 0 | keys, sampling, simulated lists and the attackers' random choices |
+| `--out` | data | output root |
+
+Each run checks itself: the false-positive rate on 10 000 trials with fresh keys, every attack within its budget,
+inequality (2), and the simulated lists against 65 536 lists. The published-scheme script also compares its green
+counts with the library's own detector.
+
 ## Figures
 
 Part 1. The critical edit fraction rho_priv against the leakage lambda, one curve per instance. Black rings mark the
@@ -209,6 +294,18 @@ Where the per-level count test stays above zero after the green count reaches it
 entropy levels at different green rates, or has turned the text too red. Its curve stops early at lambda = 1 because
 its miss rate is exactly zero from there on.
 
+Part 3. Miss rate of the green-count detector against the edit fraction, one curve per attacker, on 500 texts of 200
+tokens from OPT-1.3B. The dashed line is the report's bound for the key holder with the smallest q_t, and the dotted
+line is the same formula with the average q_t. Lower is better for the detector.
+
+The report's scheme, an independent green list at every position:
+
+![Miss rate against edit fraction for three attackers, report's scheme](figures/llm_miss_rate_report.png)
+
+The published scheme, where the list is seeded by the previous token:
+
+![Miss rate against edit fraction for three attackers, published scheme](figures/llm_miss_rate_kgw.png)
+
 ## Layout and workflow
 
 The spine of the diagram follows the report: the model, then one block per statement with the check that tests it.
@@ -222,13 +319,15 @@ implements it.
  +-- code/report_checks.py                      part 1: checks K1-K7, figure
  +-- code/claim1_program.py                     part 1: check K8, figure
  +-- code/exponent_greenlist.py                 part 2: main loop, two figures
+ +-- code/llm_edits.py                          part 3: report's scheme
+ +-- code/llm_edits_kgw.py                      part 3: published scheme
  +-- code/wmsim/                                singlepos.py, util.py,
  |                                              tokenmodel.py, attack.py,
  |                                              greencount.py, oraclenp.py,
- |                                              exponent.py
+ |                                              exponent.py, llm.py (part 3)
  +-- data/             created by the runs, untracked: csv, json, png
  +-- results/figures/  created by the runs, untracked: copies of the figures
- +-- figures/          tracked copies of the four figures shown above
+ +-- figures/          tracked copies of the figures shown above
 
  question:  beta*_n = the miss rate of the best detector against its
                       worst attack, at false-positive level alpha
