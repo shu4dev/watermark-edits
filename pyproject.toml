@@ -7,3 +7,4 @@ dependencies = ["numpy", "scipy", "matplotlib"]
 
 [dependency-groups]
 dev = ["pytest"]
+llm = ["torch", "transformers", "datasets"]  # GPU boxes only: uv sync --group llm
