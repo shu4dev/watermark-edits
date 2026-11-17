@@ -67,8 +67,8 @@ def plot(exps, star, lam_grid, n_list, n_ref, fixed_lam, paths):
             rho = col(lam, n, "rho")
             ax.set_facecolor(surf)
             if lam in rs:  # added first: behind the markers, last in the reversed legend
-                ax.axvline(rs[lam], color="black", ls="-", lw=1.2, label="critical fraction ρ*")
-            ax.plot(rho, col(lam, n, "E_np"), color=c_np, lw=2, label="oracle NP", **mk)
+                ax.axvline(rs[lam], color="black", ls="-", lw=1.2, label="green-count crossing")
+            ax.plot(rho, col(lam, n, "E_np"), color=c_np, lw=2, label="per-level count test", **mk)
             ax.plot(rho, col(lam, n, "E_gc"), color=c_gc, lw=2, label="green count", **mk)
             ax.set_title(title, color=ink, fontsize=11)
             ax.set_xlim(-0.03, 1.03)

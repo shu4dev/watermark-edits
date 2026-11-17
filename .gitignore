@@ -24,3 +24,6 @@ CLAUDE.md
 /research/
 .playwright-mcp/
 /results/
+
+# the team's report: a clone of the Overleaf project, with its own git history
+/report/

@@ -1,6 +1,15 @@
-"""Shared helpers: binomial pmf, zero padding, log-space convolution of pmfs."""
+"""Shared helpers: binomial pmf, zero padding, log-space convolution of pmfs, CSV writing."""
+import csv
+
 import numpy as np
 from scipy.stats import binom
+
+
+def write_csv(path, rows):
+    with open(path, "w", newline="") as f:
+        wr = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        wr.writeheader()
+        wr.writerows(rows)
 
 
 def pmf(N, p):
