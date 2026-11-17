@@ -109,8 +109,28 @@ Three more results from the same runs:
   10 000 trials with fresh keys are flagged (2.3e-3), because repeated pairs of (previous token, token) are counted
   every time. That script moves the threshold to 74, the empirical quantile.
 
-Not measured: the quality of the edited text, other models and other lengths. The key holder under the published scheme
-is a greedy rule and is not claimed optimal.
+Text quality. `llm_quality.py` rebuilds the edited texts of both runs from the saved arrays and scores them with a
+larger model, OPT-2.7B. The number is the perplexity of the 200 tokens: lower reads more natural, and it does not judge
+meaning. Median over the 500 texts, at the edit fraction where each attacker defeats the detector:
+
+| scheme | before any edit | random | key-blind | key holder |
+|---|---|---|---|---|
+| report's scheme, independent lists | 26.7 | 1432 | 134 | 104 |
+| published scheme, list seeded by the previous token | 25.3 | 494 | 80 | 55 |
+
+At equal budgets the key-blind attacker's edits read the most natural of the three, because it swaps in tokens the
+model itself favours. At rho = 0.3 under the report's scheme its median is 100, against 150 for the key holder and 317
+for random edits.
+
+A bound from each text's own average q_t. `llm_bound_per_text.py` tests a replacement for q_min on the saved arrays of
+the report-scheme run. For a cut-off c it adds the share of texts whose average q_t is below c to
+exp(-T D(Bern((tau - 1 + j)/T) || Bern(c))), with j the number of edits, and takes the smallest sum over c. The key
+holder's measured miss rate stays under this ceiling at every edit fraction: 0.002 against 0.048 at rho = 0.05, 0.012
+against 0.18 at 0.10 and 0.082 against 0.59 at 0.15. From rho = 0.20 the ceiling equals 1. The statement behind it was
+derived for this repository from the report's Chernoff argument and has not been checked as a proof.
+
+Not measured: similarity of the edited text to the original, other models and other lengths. The key holder under the
+published scheme is a greedy rule and is not claimed optimal.
 
 ## Install
 
@@ -263,6 +283,15 @@ Each run checks itself: the false-positive rate on 10 000 trials with fresh keys
 inequality (2), and the simulated lists against 65 536 lists. The published-scheme script also compares its green
 counts with the library's own detector.
 
+Two follow-ups read the outputs of those runs under data/results/. The per-text bound needs no GPU and takes a second.
+Text quality downloads facebook/opt-2.7b (5.3 GB) and takes about 9 minutes per scheme on an RTX 3090:
+
+```bash
+uv run python code/llm_bound_per_text.py
+uv run --group llm python code/llm_quality.py --scheme report
+PYTHONPATH=lm-watermarking uv run --group llm python code/llm_quality.py --scheme kgw
+```
+
 ## Figures
 
 Part 1. The critical edit fraction rho_priv against the leakage lambda, one curve per instance. Black rings mark the
@@ -306,6 +335,18 @@ The published scheme, where the list is seeded by the previous token:
 
 ![Miss rate against edit fraction for three attackers, published scheme](figures/llm_miss_rate_kgw.png)
 
+Text quality: median perplexity under OPT-2.7B against the edit fraction, one curve per attacker. Rings mark the edit
+fraction where each attacker defeats the detector.
+
+![Perplexity of the edited texts against edit fraction, report's scheme](figures/llm_quality_report.png)
+
+![Perplexity of the edited texts against edit fraction, published scheme](figures/llm_quality_kgw.png)
+
+The key holder's measured miss rate under the report's scheme, against the ceiling built from each text's own average
+q_t (dashed) and the formula with the average over all texts (dotted), on a log scale.
+
+![Key holder's miss rate against a ceiling from each text's own average q](figures/llm_bound_per_text.png)
+
 ## Layout and workflow
 
 The spine of the diagram follows the report: the model, then one block per statement with the check that tests it.
@@ -321,6 +362,8 @@ implements it.
  +-- code/exponent_greenlist.py                 part 2: main loop, two figures
  +-- code/llm_edits.py                          part 3: report's scheme
  +-- code/llm_edits_kgw.py                      part 3: published scheme
+ +-- code/llm_quality.py                        part 3: text quality
+ +-- code/llm_bound_per_text.py                 part 3: per-text bound
  +-- code/wmsim/                                singlepos.py, util.py,
  |                                              tokenmodel.py, attack.py,
  |                                              greencount.py, oraclenp.py,
