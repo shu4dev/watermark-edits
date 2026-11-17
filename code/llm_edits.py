@@ -73,7 +73,7 @@ def main():
     ap.add_argument("--n", type=int, default=200, help="new tokens per text")
     ap.add_argument("--texts", type=int, default=500)
     ap.add_argument("--rho-grid", type=float, nargs="+", default=[round(0.05 * i, 2) for i in range(21)])
-    ap.add_argument("--lists", type=int, default=4096, help="M, the Bernoulli lists of the key-blind posterior")
+    ap.add_argument("--lists", type=int, default=16_384, help="M, the Bernoulli lists of the key-blind posterior")
     ap.add_argument("--seed", type=int, default=0, help="keys, sampling, posterior lists, attackers' coins")
     ap.add_argument("--out", default="data", help="writes <out>/results/<slug>/report/ and <out>/figures/<slug>/")
     args = ap.parse_args()
